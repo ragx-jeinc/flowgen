@@ -1,0 +1,60 @@
+# FlowGen Example Configuration
+
+generation:
+  # Stop conditions (at least one required)
+  max_flows: 100000            # Generate 100K flows
+  # duration_seconds: 60       # OR run for 60 seconds
+
+  # Rate configuration (specify ONE method)
+  rate:
+    bandwidth_gbps: 10.0       # Target 10 Gbps bandwidth
+    # flows_per_second: 100000 # OR explicit flow rate
+
+  # Start timestamp (optional, defaults to current time)
+  start_timestamp: 1704067200  # Unix epoch (2024-01-01 00:00:00 UTC)
+
+  # Bidirectional mode (NEW! optional, defaults to 'none')
+  # Randomly swap source/destination to simulate bidirectional traffic
+  # bidirectional_mode: random          # 'none' or 'random'
+  # bidirectional_probability: 0.5      # Probability of swapping src/dst (0.0-1.0)
+  #
+  # Example: 0.5 probability means ~50% of flows will be "reversed" (dst→src)
+  # Use distinct client vs server subnets for realistic bidirectional traffic
+
+# Traffic mix - percentages must sum to 100
+traffic_patterns:
+  - type: web_traffic
+    percentage: 40
+
+  - type: dns_traffic
+    percentage: 20
+
+  - type: database_traffic
+    percentage: 15
+
+  - type: ssh_traffic
+    percentage: 10
+
+  - type: random
+    percentage: 15
+
+# Network topology
+network:
+  # For bidirectional mode, use distinct client vs server subnets
+  # so swapped flows naturally look like server responses
+  source_subnets:
+    - 192.168.1.0/24
+    - 192.168.2.0/24
+
+  # Optional: weights for source subnets (must sum to 100)
+  source_weights: [70, 30]  # 70% from first, 30% from second
+
+  destination_subnets:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+
+# Packet size configuration
+packets:
+  min_size: 64               # Minimum packet size in bytes
+  max_size: 1500             # Maximum packet size (MTU)
+  average_size: 800          # Average size for bandwidth calculations

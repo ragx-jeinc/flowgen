@@ -1,0 +1,42 @@
+# High Bandwidth Configuration - 40 Gbps
+
+generation:
+  max_flows: 10000000         # 10 million flows
+
+  rate:
+    bandwidth_gbps: 40.0      # 40 Gbps target bandwidth
+
+  start_timestamp: 1704067200
+
+# Realistic datacenter traffic mix
+traffic_patterns:
+  - type: web_traffic
+    percentage: 35
+
+  - type: database_traffic
+    percentage: 30
+
+  - type: dns_traffic
+    percentage: 10
+
+  - type: ssh_traffic
+    percentage: 5
+
+  - type: ftp_traffic
+    percentage: 10
+
+  - type: smtp_traffic
+    percentage: 10
+
+network:
+  source_subnets:
+    - 10.1.0.0/16    # Internal network
+
+  destination_subnets:
+    - 10.2.0.0/16    # Server network
+    - 10.3.0.0/16    # Storage network
+
+packets:
+  min_size: 64
+  max_size: 1500
+  average_size: 800

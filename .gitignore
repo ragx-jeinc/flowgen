@@ -1,0 +1,105 @@
+# FlowGen .gitignore
+
+# Build directories
+build/
+build_*/
+*.build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+.eggs/
+*.whl
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Python bindings (generated)
+flowgen/_flowgen_core.*.so
+flowgen/libflowgen.so
+
+# C++ build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Output files (generated data)
+*.csv
+*.json
+!configs/*.yaml
+!configs/*.json
+output_*.csv
+flows_*.csv
+cpp_output_flows.csv
+nanosec_test.csv
+test.csv
+*.pcap
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude AI session files (optional - keep or remove based on preference)
+# .claude/
+
+# Test and temporary files
+test_output/
+tmp/
+temp/
+*.tmp
+*.log
+
+# Generated documentation (if using Doxygen, etc.)
+html/
+latex/
+docs/_build/
+
+# Compiled examples
+examples/basic_usage
+cpp/examples/basic_usage
+basic_usage
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Backup files
+*.bak
+*.backup
+*.old

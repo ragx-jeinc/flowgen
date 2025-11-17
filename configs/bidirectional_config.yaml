@@ -1,0 +1,45 @@
+# FlowGen Bidirectional Traffic Configuration Example
+# This config demonstrates realistic bidirectional traffic generation
+
+generation:
+  max_flows: 100000
+
+  rate:
+    bandwidth_gbps: 10.0
+
+  start_timestamp: 1704067200
+
+  # Enable bidirectional mode - 50% of flows will be reversed
+  bidirectional_mode: random
+  bidirectional_probability: 0.5
+
+traffic_patterns:
+  - type: web_traffic
+    percentage: 50
+
+  - type: database_traffic
+    percentage: 30
+
+  - type: dns_traffic
+    percentage: 20
+
+# Network topology for bidirectional traffic
+# Use distinct client vs server subnets for realistic traffic
+network:
+  # Client networks (internal users)
+  source_subnets:
+    - 192.168.0.0/16    # Internal network 1
+    - 10.10.0.0/16      # Internal network 2
+
+  source_weights: [60, 40]
+
+  # Server networks (services)
+  destination_subnets:
+    - 10.100.0.0/16     # Server farm 1
+    - 203.0.113.0/24    # Public servers (RFC5737 test net)
+
+# Packet configuration
+packets:
+  min_size: 64
+  max_size: 1500
+  average_size: 800

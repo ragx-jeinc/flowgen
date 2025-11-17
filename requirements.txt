@@ -1,0 +1,12 @@
+# FlowGen Requirements
+
+# Core dependencies
+pyyaml>=6.0
+numpy>=1.20.0
+
+# Development dependencies (optional)
+pytest>=7.0.0
+pytest-cov>=3.0.0
+
+# Build dependencies (for C++ extension)
+# pybind11>=2.10.0  # Will be fetched by CMake if not available
