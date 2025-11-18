@@ -289,10 +289,9 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "\n\n";
 
-    // Create generator configuration
+    // Create generator configuration (lightweight - no stopping conditions)
     GeneratorConfig config;
     config.bandwidth_gbps = bandwidth_gbps;
-    config.max_flows = max_flows;
     config.start_timestamp_ns = start_ts_ns;
     config.source_subnets = src_subnets;
     config.destination_subnets = dst_subnets;
@@ -318,9 +317,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto stats = generator.get_stats();
+    // Calculate expected flow rate from bandwidth
+    double flows_per_second = utils::calculate_flows_per_second(bandwidth_gbps, pkt_avg);
     std::cout << "Generator initialized successfully\n";
-    std::cout << "Target rate: " << stats.flows_per_second << " flows/sec\n\n";
+    std::cout << "Target rate: " << flows_per_second << " flows/sec\n";
+    std::cout << "Will generate " << max_flows << " flows\n\n";
 
     // Open output file
     std::ofstream output(output_file);
@@ -332,14 +333,18 @@ int main(int argc, char* argv[]) {
     // Write CSV header
     output << FlowRecord::csv_header() << "\n";
 
-    // Generate flows
+    // Generate flows (application manages stop condition)
     std::cout << "Generating flows...\n";
     auto start_time = std::chrono::high_resolution_clock::now();
 
     FlowRecord flow;
     uint64_t count = 0;
 
-    while (generator.next(flow)) {
+    // Application-managed loop - generate until we reach max_flows
+    while (count < max_flows) {
+        // Generate next flow (lightweight generator always succeeds)
+        generator.next(flow);
+
         // Write flow to CSV
         output << flow.to_csv() << "\n";
 
@@ -358,13 +363,16 @@ int main(int argc, char* argv[]) {
 
     output.close();
 
+    // Calculate timestamp range
+    uint64_t final_timestamp = generator.current_timestamp_ns();
+    double timestamp_range_sec = (final_timestamp - start_ts_ns) / 1e9;
+
     // Print statistics
-    stats = generator.get_stats();
     std::cout << "\nGeneration complete!\n";
-    std::cout << "  Total flows: " << stats.flows_generated << "\n";
+    std::cout << "  Total flows: " << count << "\n";
     std::cout << "  Elapsed time: " << elapsed << " seconds\n";
-    std::cout << "  Generation rate: " << (stats.flows_generated / elapsed) << " flows/sec\n";
-    std::cout << "  Timestamp range: " << stats.elapsed_time_seconds << " seconds\n";
+    std::cout << "  Generation rate: " << (count / elapsed) << " flows/sec\n";
+    std::cout << "  Timestamp range: " << timestamp_range_sec << " seconds\n";
     std::cout << "\nOutput written to: " << output_file << "\n";
 
     // Show first few flows if verbose

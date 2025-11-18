@@ -8,15 +8,9 @@ namespace flowgen {
 
 // GeneratorConfig validation
 bool GeneratorConfig::validate(std::string* error) const {
-    // Check rate configuration
-    if (bandwidth_gbps <= 0.0 && flows_per_second <= 0.0) {
-        if (error) *error = "Must specify either bandwidth_gbps or flows_per_second";
-        return false;
-    }
-
-    // Check stop conditions
-    if (max_flows == 0 && duration_seconds <= 0.0) {
-        if (error) *error = "Must specify at least one of: max_flows, duration_seconds";
+    // Check bandwidth configuration
+    if (bandwidth_gbps <= 0.0) {
+        if (error) *error = "bandwidth_gbps must be greater than 0";
         return false;
     }
 
@@ -91,11 +85,9 @@ bool GeneratorConfig::validate(std::string* error) const {
 // FlowGenerator implementation
 FlowGenerator::FlowGenerator()
     : initialized_(false),
-      flows_per_second_(0.0),
       inter_arrival_time_ns_(0),
       start_timestamp_ns_(0),
-      current_timestamp_ns_(0),
-      flow_count_(0) {
+      current_timestamp_ns_(0) {
 }
 
 FlowGenerator::~FlowGenerator() = default;
@@ -110,18 +102,12 @@ bool FlowGenerator::initialize(const GeneratorConfig& config) {
 
     config_ = config;
 
-    // Calculate flow rate
-    if (config_.bandwidth_gbps > 0.0) {
-        flows_per_second_ = utils::calculate_flows_per_second(
-            config_.bandwidth_gbps,
-            config_.average_packet_size
-        );
-    } else {
-        flows_per_second_ = config_.flows_per_second;
-    }
-
-    // Calculate inter-arrival time in nanoseconds
-    double inter_arrival_sec = 1.0 / flows_per_second_;
+    // Calculate inter-arrival time based on bandwidth
+    double flows_per_second = utils::calculate_flows_per_second(
+        config_.bandwidth_gbps,
+        config_.average_packet_size
+    );
+    double inter_arrival_sec = 1.0 / flows_per_second;
     inter_arrival_time_ns_ = static_cast<uint64_t>(inter_arrival_sec * 1e9);
 
     // Set start timestamp in nanoseconds
@@ -135,7 +121,6 @@ bool FlowGenerator::initialize(const GeneratorConfig& config) {
     }
 
     current_timestamp_ns_ = start_timestamp_ns_;
-    flow_count_ = 0;
 
     // Initialize pattern generators
     pattern_generators_.clear();
@@ -151,20 +136,9 @@ bool FlowGenerator::initialize(const GeneratorConfig& config) {
     return true;
 }
 
-bool FlowGenerator::next(FlowRecord& flow) {
-    if (!initialized_) {
-        return false;
-    }
-
-    if (should_stop()) {
-        return false;
-    }
-
+void FlowGenerator::next(FlowRecord& flow) {
     // Select pattern based on weights
     PatternGenerator* pattern = select_pattern();
-    if (!pattern) {
-        return false;
-    }
 
     // Generate flow record
     flow = pattern->generate(
@@ -186,52 +160,14 @@ bool FlowGenerator::next(FlowRecord& flow) {
         }
     }
 
-    // Update state
-    flow_count_++;
+    // Update timestamp for next flow
     current_timestamp_ns_ += inter_arrival_time_ns_;
-
-    return true;
-}
-
-bool FlowGenerator::is_done() const {
-    if (!initialized_) {
-        return true;
-    }
-    return should_stop();
 }
 
 void FlowGenerator::reset() {
     if (initialized_) {
         current_timestamp_ns_ = start_timestamp_ns_;
-        flow_count_ = 0;
     }
-}
-
-FlowGenerator::Stats FlowGenerator::get_stats() const {
-    Stats stats;
-    stats.flows_generated = flow_count_;
-    // Convert nanoseconds to seconds for elapsed time
-    stats.elapsed_time_seconds = (current_timestamp_ns_ - start_timestamp_ns_) / 1e9;
-    stats.flows_per_second = flows_per_second_;
-    stats.current_timestamp_ns = current_timestamp_ns_;
-    return stats;
-}
-
-bool FlowGenerator::should_stop() const {
-    // Check flow count limit
-    if (config_.max_flows > 0 && flow_count_ >= config_.max_flows) {
-        return true;
-    }
-
-    // Check duration limit
-    if (config_.duration_seconds > 0.0) {
-        double elapsed = (current_timestamp_ns_ - start_timestamp_ns_) / 1e9;
-        if (elapsed >= config_.duration_seconds) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 PatternGenerator* FlowGenerator::select_pattern() {

@@ -11,15 +11,13 @@ namespace flowgen {
 
 /**
  * Configuration for flow generation
+ *
+ * Lightweight configuration - generator just produces flows on demand.
+ * Applications decide when to stop requesting flows.
  */
 struct GeneratorConfig {
-    // Rate configuration
-    double bandwidth_gbps = 0.0;
-    double flows_per_second = 0.0;
-
-    // Stop conditions
-    uint64_t max_flows = 0;
-    double duration_seconds = 0.0;
+    // Rate configuration (required)
+    double bandwidth_gbps = 10.0;  // Link speed to simulate
 
     // Timestamp (nanoseconds since Unix epoch)
     uint64_t start_timestamp_ns = 0;
@@ -52,7 +50,10 @@ struct GeneratorConfig {
 };
 
 /**
- * Main flow generator class
+ * Lightweight flow generator
+ *
+ * Generates flows on demand based on bandwidth simulation.
+ * Applications decide when to stop requesting flows.
  */
 class FlowGenerator {
 public:
@@ -73,35 +74,15 @@ public:
     /**
      * Generate next flow record
      *
-     * @return Flow record, or empty optional if generation complete
+     * Always succeeds - generates flows indefinitely.
+     * Application decides when to stop calling next().
      */
-    bool next(FlowRecord& flow);
-
-    /**
-     * Check if generation is complete
-     */
-    bool is_done() const;
+    void next(FlowRecord& flow);
 
     /**
      * Reset generator to initial state
      */
     void reset();
-
-    /**
-     * Get current statistics
-     */
-    struct Stats {
-        uint64_t flows_generated;
-        double elapsed_time_seconds;
-        double flows_per_second;
-        uint64_t current_timestamp_ns;
-    };
-    Stats get_stats() const;
-
-    /**
-     * Get flows generated count
-     */
-    uint64_t flow_count() const { return flow_count_; }
 
     /**
      * Get current timestamp in nanoseconds
@@ -115,13 +96,10 @@ private:
     std::vector<std::unique_ptr<PatternGenerator>> pattern_generators_;
     std::vector<double> pattern_weights_;
 
-    double flows_per_second_;
     uint64_t inter_arrival_time_ns_;  // nanoseconds between flows
     uint64_t start_timestamp_ns_;
     uint64_t current_timestamp_ns_;
-    uint64_t flow_count_;
 
-    bool should_stop() const;
     PatternGenerator* select_pattern();
 };
 

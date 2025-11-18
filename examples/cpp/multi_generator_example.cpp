@@ -1,6 +1,7 @@
 // multi_generator_example.cpp
 // Example: Multiple FlowGenerator instances writing to separate directories
 // Features: Parallel thread-based generation for high performance
+// Uses lightweight FlowGenerator - application manages all stop conditions
 
 #include <flowgen/generator.hpp>
 #include <flowgen/flow_record.hpp>
@@ -16,49 +17,29 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <filesystem>
 
-// Simple command-line argument parser
+// Command-line options
 struct MultiGenOptions {
+    // Generator configuration
     size_t num_generators = 12;
-    size_t flows_per_generator = 10000;
-    size_t flows_per_file = 1000;
-    std::string output_base_path = "./output";
     double bandwidth_gbps = 10.0;
+    std::string output_base_path = "./output";
+    size_t flows_per_file = 1000;
+
+    // Stop conditions (mutually exclusive - one must be specified)
+    uint64_t start_timestamp_ns = 0;   // Required
+    uint64_t end_timestamp_ns = 0;     // Option 1: explicit end time
+    uint64_t duration_ns = 0;          // Option 2: duration from start
+    size_t total_flows = 0;            // Option 3: total flow count
+
+    // Execution mode
     bool verbose = false;
-    bool parallel = true;  // Enable parallel generation by default
+    bool parallel = true;
 };
 
 // Thread-safe console output
 std::mutex g_console_mutex;
-
-// Create directory (recursive)
-bool create_directory(const std::string& path) {
-    // Try to create directory
-    if (mkdir(path.c_str(), 0755) == 0) {
-        return true;
-    }
-
-    // Check if it already exists
-    struct stat st;
-    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
-        return true;
-    }
-
-    // Try creating parent directories
-    size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos && pos > 0) {
-        std::string parent = path.substr(0, pos);
-        if (!create_directory(parent)) {
-            return false;
-        }
-        return mkdir(path.c_str(), 0755) == 0;
-    }
-
-    return false;
-}
 
 // Generator instance manager
 class GeneratorInstance {
@@ -66,7 +47,8 @@ private:
     size_t m_id;
     std::string m_output_dir;
     size_t m_flows_per_file;
-    size_t m_total_flows;
+    uint64_t m_end_timestamp_ns;  // Stopping condition (timestamp)
+    size_t m_max_flows;           // Stopping condition (flow count)
     bool m_verbose;
 
     flowgen::FlowGenerator m_generator;
@@ -79,20 +61,27 @@ private:
 public:
     GeneratorInstance(size_t id, const std::string& base_path,
                      const flowgen::GeneratorConfig& config,
-                     size_t flows_per_file, size_t total_flows, bool verbose)
+                     size_t flows_per_file,
+                     uint64_t end_timestamp_ns,
+                     size_t max_flows,
+                     bool verbose)
         : m_id(id)
         , m_flows_per_file(flows_per_file)
-        , m_total_flows(total_flows)
+        , m_end_timestamp_ns(end_timestamp_ns)
+        , m_max_flows(max_flows)
         , m_verbose(verbose)
         , m_flows_generated(0)
         , m_files_written(0)
         , m_current_batch_count(0)
     {
-        // Create output directory for this generator
+        // Create output directory for this generator using std::filesystem
         m_output_dir = base_path + "/generator_" + std::to_string(id);
 
-        if (!create_directory(m_output_dir)) {
-            throw std::runtime_error("Failed to create directory: " + m_output_dir);
+        std::filesystem::path dir_path(m_output_dir);
+        if (!std::filesystem::exists(dir_path)) {
+            if (!std::filesystem::create_directories(dir_path)) {
+                throw std::runtime_error("Failed to create directory: " + m_output_dir);
+            }
         }
 
         if (m_verbose) {
@@ -118,7 +107,11 @@ public:
     void generate_all() {
         flowgen::FlowRecord flow;
 
-        while (m_flows_generated < m_total_flows && m_generator.next(flow)) {
+        // Keep generating flows until stopping condition met
+        while (!should_stop()) {
+            // Generate next flow (always succeeds with lightweight generator)
+            m_generator.next(flow);
+
             // Check if we need to rotate to a new file
             if (m_current_batch_count >= m_flows_per_file) {
                 close_current_file();
@@ -130,21 +123,31 @@ public:
             m_current_batch_count++;
             m_flows_generated++;
 
-            // Progress reporting (every 10% or every 10K flows, whichever is less frequent)
-            if (m_verbose) {
-                size_t progress_interval = std::max(m_total_flows / 10, size_t(10000));
-                if (m_flows_generated % progress_interval == 0) {
-                    std::lock_guard<std::mutex> lock(g_console_mutex);
-                    double pct = (m_flows_generated * 100.0) / m_total_flows;
-                    std::cout << "[Generator " << m_id << "] Progress: "
-                              << std::fixed << std::setprecision(1) << pct << "% ("
-                              << m_flows_generated << "/" << m_total_flows << " flows, "
-                              << m_files_written + 1 << " files)" << std::endl;
-                }
+            // Progress reporting (every 10K flows)
+            if (m_verbose && m_flows_generated % 10000 == 0) {
+                std::lock_guard<std::mutex> lock(g_console_mutex);
+                std::cout << "[Generator " << m_id << "] Progress: "
+                          << m_flows_generated << " flows, "
+                          << m_files_written + 1 << " files" << std::endl;
             }
         }
 
         close_current_file();
+    }
+
+    // Check if we should stop generating flows
+    bool should_stop() const {
+        // Check flow count limit
+        if (m_max_flows > 0 && m_flows_generated >= m_max_flows) {
+            return true;
+        }
+
+        // Check timestamp limit
+        if (m_end_timestamp_ns > 0 && m_generator.current_timestamp_ns() >= m_end_timestamp_ns) {
+            return true;
+        }
+
+        return false;
     }
 
     size_t get_id() const { return m_id; }
@@ -193,8 +196,8 @@ flowgen::GeneratorConfig create_config(size_t generator_id, const MultiGenOption
     flowgen::GeneratorConfig config;
 
     // Basic settings
-    config.max_flows = opts.flows_per_generator;
     config.bandwidth_gbps = opts.bandwidth_gbps;
+    config.start_timestamp_ns = opts.start_timestamp_ns + (generator_id * 1000000ULL);  // +1ms per generator
 
     // Different source subnets for each generator to create diversity
     // Generator 0: 192.168.0.0/16
@@ -278,19 +281,29 @@ int main(int argc, char** argv) {
     MultiGenOptions opts;
 
     // Create argument parser
-    examples::ArgParser parser("Multi-Generator Example - Parallel flow generation with multiple instances");
+    examples::ArgParser parser("Multi-Generator Example - Lightweight flow generation");
 
     // Add options
     parser.add_option("-n", "num-generators", opts.num_generators,
                      "Number of generator instances", size_t(12));
-    parser.add_option("-f", "flows-per-generator", opts.flows_per_generator,
-                     "Flows per generator", size_t(10000));
-    parser.add_option("-b", "batch-size", opts.flows_per_file,
-                     "Flows per CSV file", size_t(1000));
-    parser.add_option("-o", "output-path", opts.output_base_path,
-                     "Base output directory", false, "./output");
     parser.add_option("-w", "bandwidth", opts.bandwidth_gbps,
                      "Bandwidth in Gbps", 10.0);
+    parser.add_option("-o", "output-path", opts.output_base_path,
+                     "Base output directory", false, "./output");
+    parser.add_option("-b", "batch-size", opts.flows_per_file,
+                     "Flows per CSV file", size_t(1000));
+
+    // Stop conditions (one must be specified)
+    parser.add_option("", "start-timestamp", opts.start_timestamp_ns,
+                     "Start timestamp (nanoseconds since epoch)", size_t(1704067200000000000ULL));
+    parser.add_option("", "end-timestamp", opts.end_timestamp_ns,
+                     "End timestamp (nanoseconds)", size_t(0));
+    parser.add_option("", "duration", opts.duration_ns,
+                     "Duration (nanoseconds)", size_t(0));
+    parser.add_option("", "total-flows", opts.total_flows,
+                     "Total flows to generate", size_t(0));
+
+    // Execution mode
     parser.add_flag("verbose", opts.verbose,
                    "Verbose output");
     parser.add_flag("sequential", opts.parallel,
@@ -300,15 +313,21 @@ int main(int argc, char** argv) {
     if (!parser.parse(argc, argv)) {
         if (parser.should_show_help()) {
             parser.print_help();
-            std::cout << "\nExamples:\n"
-                      << "  " << argv[0] << " -n 12 -f 50000 -o /tmp/flowdata\n"
-                      << "  " << argv[0] << " -n 20 -f 100000 --verbose --sequential\n\n"
+            std::cout << "\nStop Conditions (specify ONE of the following):\n"
+                      << "  --end-timestamp: Generate flows until this timestamp\n"
+                      << "  --duration: Generate flows for this many nanoseconds\n"
+                      << "  --total-flows: Generate this many flows total (across all generators)\n\n"
+                      << "Examples:\n"
+                      << "  # Generate flows for 60 seconds\n"
+                      << "  " << argv[0] << " -n 12 -w 10 --duration 60000000000\n\n"
+                      << "  # Generate 1M total flows\n"
+                      << "  " << argv[0] << " -n 10 --total-flows 1000000\n\n"
+                      << "  # Generate until specific timestamp\n"
+                      << "  " << argv[0] << " -n 5 --start-timestamp 1704067200000000000 \\\n"
+                      << "                      --end-timestamp 1704067260000000000\n\n"
                       << "Output Structure:\n"
                       << "  <output-path>/generator_0/, generator_1/, ...\n"
-                      << "  Each generator directory contains flows_NNNN.csv files\n\n"
-                      << "Performance:\n"
-                      << "  Parallel mode: ~750K flows/second (12 generators)\n"
-                      << "  Sequential mode: ~300K flows/second\n";
+                      << "  Each generator directory contains flows_NNNN.csv files\n";
         } else {
             std::cerr << "Error: " << parser.error() << std::endl;
         }
@@ -318,28 +337,68 @@ int main(int argc, char** argv) {
     // Flip parallel flag (since the flag sets it to true, but we want sequential to set parallel=false)
     opts.parallel = !opts.parallel;
 
-    // Print configuration
-    std::cout << "\n========================================\n";
-    std::cout << "Multi-Generator Flow Example\n";
-    std::cout << "========================================\n\n";
-    std::cout << "Configuration:\n";
-    std::cout << "  Number of generators: " << opts.num_generators << "\n";
-    std::cout << "  Flows per generator: " << opts.flows_per_generator << "\n";
-    std::cout << "  Flows per file: " << opts.flows_per_file << "\n";
-    std::cout << "  Bandwidth: " << opts.bandwidth_gbps << " Gbps\n";
-    std::cout << "  Execution mode: " << (opts.parallel ? "Parallel" : "Sequential") << "\n";
-    std::cout << "  Output base path: " << opts.output_base_path << "\n";
-    std::cout << "  Total flows: " << (opts.num_generators * opts.flows_per_generator) << "\n";
-    std::cout << "\n";
+    // Validate stop conditions - exactly one must be specified
+    int stop_conditions = 0;
+    if (opts.end_timestamp_ns > 0) stop_conditions++;
+    if (opts.duration_ns > 0) stop_conditions++;
+    if (opts.total_flows > 0) stop_conditions++;
 
-    // Create base output directory
-    if (!create_directory(opts.output_base_path)) {
-        std::cerr << "Error: Failed to create base output directory: "
-                  << opts.output_base_path << std::endl;
+    if (stop_conditions == 0) {
+        std::cerr << "Error: Must specify one stop condition (--end-timestamp, --duration, or --total-flows)\n";
+        return 1;
+    }
+    if (stop_conditions > 1) {
+        std::cerr << "Error: Only one stop condition can be specified\n";
         return 1;
     }
 
-    std::cout << "Created base directory: " << opts.output_base_path << "\n\n";
+    // Calculate end_timestamp_ns if duration specified
+    if (opts.duration_ns > 0) {
+        opts.end_timestamp_ns = opts.start_timestamp_ns + opts.duration_ns;
+    }
+
+    // Calculate total flows per generator if total_flows specified
+    size_t flows_per_generator = 0;
+    if (opts.total_flows > 0) {
+        flows_per_generator = opts.total_flows / opts.num_generators;
+        if (opts.total_flows % opts.num_generators != 0) {
+            flows_per_generator++; // Round up
+        }
+    }
+
+    // Print configuration
+    std::cout << "\n========================================\n";
+    std::cout << "Multi-Generator Flow Example (Lightweight)\n";
+    std::cout << "========================================\n\n";
+    std::cout << "Configuration:\n";
+    std::cout << "  Number of generators: " << opts.num_generators << "\n";
+    std::cout << "  Bandwidth: " << opts.bandwidth_gbps << " Gbps\n";
+    std::cout << "  Execution mode: " << (opts.parallel ? "Parallel" : "Sequential") << "\n";
+    std::cout << "  Output base path: " << opts.output_base_path << "\n";
+    std::cout << "  Flows per file: " << opts.flows_per_file << "\n";
+
+    // Print stop condition
+    if (opts.end_timestamp_ns > 0 && opts.duration_ns > 0) {
+        std::cout << "  Stop condition: Duration (" << (opts.duration_ns / 1000000000.0) << " seconds)\n";
+    } else if (opts.end_timestamp_ns > 0) {
+        std::cout << "  Stop condition: End timestamp (" << opts.end_timestamp_ns << " ns)\n";
+    } else {
+        std::cout << "  Stop condition: Total flows (" << opts.total_flows << ")\n";
+        std::cout << "  Flows per generator: ~" << flows_per_generator << "\n";
+    }
+    std::cout << "\n";
+
+    // Create base output directory using std::filesystem
+    std::filesystem::path output_path(opts.output_base_path);
+    try {
+        if (!std::filesystem::exists(output_path)) {
+            std::filesystem::create_directories(output_path);
+        }
+        std::cout << "Output directory: " << std::filesystem::absolute(output_path) << "\n\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Error: Failed to create output directory: " << e.what() << std::endl;
+        return 1;
+    }
 
     // Create all generator instances
     std::cout << "Initializing " << opts.num_generators << " generators...\n";
@@ -354,7 +413,8 @@ int main(int argc, char** argv) {
                 opts.output_base_path,
                 config,
                 opts.flows_per_file,
-                opts.flows_per_generator,
+                opts.end_timestamp_ns,          // Stopping condition: timestamp
+                flows_per_generator,            // Stopping condition: flow count
                 opts.verbose
             );
 
@@ -422,15 +482,15 @@ int main(int argc, char** argv) {
         // Sequential generation: one generator at a time
         for (auto& gen : generators) {
             if (!opts.verbose) {
-                std::cout << "Generator " << gen->get_id() << ": Generating "
-                          << opts.flows_per_generator << " flows..." << std::flush;
+                std::cout << "Generator " << gen->get_id() << ": Generating flows..." << std::flush;
             }
 
             try {
                 gen->generate_all();
 
                 if (!opts.verbose) {
-                    std::cout << " Done (" << gen->get_files_written() << " files)\n";
+                    std::cout << " Done (" << gen->get_flows_generated()
+                              << " flows, " << gen->get_files_written() << " files)\n";
                 }
             } catch (const std::exception& e) {
                 std::cerr << "\nError in generator " << gen->get_id()
