@@ -23,3 +23,21 @@ add_custom_command(TARGET basic_usage POST_BUILD
         ${CMAKE_BINARY_DIR}/$<TARGET_FILE_NAME:flowgen>
     COMMENT "Copying libflowgen.so to build directory"
 )
+
+# Multi-generator example
+add_executable(multi_generator_example multi_generator_example.cpp)
+target_link_libraries(multi_generator_example PRIVATE flowgen)
+
+set_target_properties(multi_generator_example PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# Copy libflowgen.so for multi_generator_example too
+add_custom_command(TARGET multi_generator_example POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:flowgen>
+        ${CMAKE_BINARY_DIR}/$<TARGET_FILE_NAME:flowgen>
+    COMMENT "Copying libflowgen.so to build directory"
+)
