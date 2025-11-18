@@ -4,6 +4,7 @@
 
 #include <flowgen/generator.hpp>
 #include <flowgen/flow_record.hpp>
+#include "arg_parser.hpp"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -32,73 +33,6 @@ struct MultiGenOptions {
 
 // Thread-safe console output
 std::mutex g_console_mutex;
-
-void print_usage(const char* prog_name) {
-    std::cout << "Multi-Generator Example (Parallel)\n"
-              << "===================================\n\n"
-              << "Usage: " << prog_name << " [OPTIONS]\n\n"
-              << "Options:\n"
-              << "  -n, --num-generators NUM      Number of generator instances (default: 12)\n"
-              << "  -f, --flows-per-generator NUM Flows per generator (default: 10000)\n"
-              << "  -b, --batch-size NUM          Flows per CSV file (default: 1000)\n"
-              << "  -o, --output-path PATH        Base output directory (default: ./output)\n"
-              << "  -w, --bandwidth GBPS          Bandwidth in Gbps (default: 10.0)\n"
-              << "  -v, --verbose                 Verbose output\n"
-              << "  --sequential                  Sequential generation (default: parallel)\n"
-              << "  -h, --help                    Show this help\n\n"
-              << "Example:\n"
-              << "  " << prog_name << " -n 12 -f 50000 -o /tmp/flowdata\n"
-              << "  " << prog_name << " -n 20 -f 100000 -v --sequential\n\n"
-              << "Output Structure:\n"
-              << "  <output-path>/\n"
-              << "    generator_0/\n"
-              << "      flows_0000.csv\n"
-              << "      flows_0001.csv\n"
-              << "      ...\n"
-              << "    generator_1/\n"
-              << "      flows_0000.csv\n"
-              << "      ...\n\n"
-              << "Performance:\n"
-              << "  Parallel mode uses one thread per generator for maximum throughput.\n"
-              << "  Sequential mode generates flows one generator at a time.\n";
-}
-
-bool parse_args(int argc, char** argv, MultiGenOptions& opts) {
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-
-        if (arg == "-h" || arg == "--help") {
-            print_usage(argv[0]);
-            return false;
-        } else if (arg == "-n" || arg == "--num-generators") {
-            if (i + 1 < argc) {
-                opts.num_generators = std::stoull(argv[++i]);
-            }
-        } else if (arg == "-f" || arg == "--flows-per-generator") {
-            if (i + 1 < argc) {
-                opts.flows_per_generator = std::stoull(argv[++i]);
-            }
-        } else if (arg == "-b" || arg == "--batch-size") {
-            if (i + 1 < argc) {
-                opts.flows_per_file = std::stoull(argv[++i]);
-            }
-        } else if (arg == "-o" || arg == "--output-path") {
-            if (i + 1 < argc) {
-                opts.output_base_path = argv[++i];
-            }
-        } else if (arg == "-w" || arg == "--bandwidth") {
-            if (i + 1 < argc) {
-                opts.bandwidth_gbps = std::stod(argv[++i]);
-            }
-        } else if (arg == "-v" || arg == "--verbose") {
-            opts.verbose = true;
-        } else if (arg == "--sequential") {
-            opts.parallel = false;
-        }
-    }
-
-    return true;
-}
 
 // Create directory (recursive)
 bool create_directory(const std::string& path) {
@@ -343,10 +277,46 @@ flowgen::GeneratorConfig create_config(size_t generator_id, const MultiGenOption
 int main(int argc, char** argv) {
     MultiGenOptions opts;
 
-    // Parse command line arguments
-    if (!parse_args(argc, argv, opts)) {
-        return 0; // Help was shown
+    // Create argument parser
+    examples::ArgParser parser("Multi-Generator Example - Parallel flow generation with multiple instances");
+
+    // Add options
+    parser.add_option("-n", "num-generators", opts.num_generators,
+                     "Number of generator instances", size_t(12));
+    parser.add_option("-f", "flows-per-generator", opts.flows_per_generator,
+                     "Flows per generator", size_t(10000));
+    parser.add_option("-b", "batch-size", opts.flows_per_file,
+                     "Flows per CSV file", size_t(1000));
+    parser.add_option("-o", "output-path", opts.output_base_path,
+                     "Base output directory", false, "./output");
+    parser.add_option("-w", "bandwidth", opts.bandwidth_gbps,
+                     "Bandwidth in Gbps", 10.0);
+    parser.add_flag("verbose", opts.verbose,
+                   "Verbose output");
+    parser.add_flag("sequential", opts.parallel,
+                   "Sequential generation (default: parallel)");
+
+    // Parse arguments
+    if (!parser.parse(argc, argv)) {
+        if (parser.should_show_help()) {
+            parser.print_help();
+            std::cout << "\nExamples:\n"
+                      << "  " << argv[0] << " -n 12 -f 50000 -o /tmp/flowdata\n"
+                      << "  " << argv[0] << " -n 20 -f 100000 --verbose --sequential\n\n"
+                      << "Output Structure:\n"
+                      << "  <output-path>/generator_0/, generator_1/, ...\n"
+                      << "  Each generator directory contains flows_NNNN.csv files\n\n"
+                      << "Performance:\n"
+                      << "  Parallel mode: ~750K flows/second (12 generators)\n"
+                      << "  Sequential mode: ~300K flows/second\n";
+        } else {
+            std::cerr << "Error: " << parser.error() << std::endl;
+        }
+        return parser.should_show_help() ? 0 : 1;
     }
+
+    // Flip parallel flag (since the flag sets it to true, but we want sequential to set parallel=false)
+    opts.parallel = !opts.parallel;
 
     // Print configuration
     std::cout << "\n========================================\n";
