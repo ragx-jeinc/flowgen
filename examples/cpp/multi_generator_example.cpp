@@ -19,10 +19,74 @@
 #include <atomic>
 #include <filesystem>
 
+// Parse generator ID list from string
+// Supports: "1,2,3" (comma-separated), "1-5" (range), "1..5" (range)
+std::vector<size_t> parse_generator_ids(const std::string& input) {
+    std::vector<size_t> ids;
+
+    if (input.empty()) {
+        throw std::runtime_error("Generator IDs cannot be empty");
+    }
+
+    std::string token;
+    std::istringstream stream(input);
+
+    while (std::getline(stream, token, ',')) {
+        // Trim whitespace
+        token.erase(0, token.find_first_not_of(" \t\n\r"));
+        token.erase(token.find_last_not_of(" \t\n\r") + 1);
+
+        if (token.empty()) continue;
+
+        // Check for range with dash (1-5)
+        size_t dash_pos = token.find('-');
+        if (dash_pos != std::string::npos && dash_pos > 0 && dash_pos < token.length() - 1) {
+            size_t start = std::stoull(token.substr(0, dash_pos));
+            size_t end = std::stoull(token.substr(dash_pos + 1));
+
+            if (start > end) {
+                throw std::runtime_error("Invalid range: start (" + std::to_string(start) +
+                                       ") > end (" + std::to_string(end) + ")");
+            }
+
+            for (size_t i = start; i <= end; ++i) {
+                ids.push_back(i);
+            }
+            continue;
+        }
+
+        // Check for range with double dots (1..5)
+        size_t ddot_pos = token.find("..");
+        if (ddot_pos != std::string::npos && ddot_pos > 0 && ddot_pos < token.length() - 2) {
+            size_t start = std::stoull(token.substr(0, ddot_pos));
+            size_t end = std::stoull(token.substr(ddot_pos + 2));
+
+            if (start > end) {
+                throw std::runtime_error("Invalid range: start (" + std::to_string(start) +
+                                       ") > end (" + std::to_string(end) + ")");
+            }
+
+            for (size_t i = start; i <= end; ++i) {
+                ids.push_back(i);
+            }
+            continue;
+        }
+
+        // Single value
+        ids.push_back(std::stoull(token));
+    }
+
+    if (ids.empty()) {
+        throw std::runtime_error("No valid generator IDs parsed from input");
+    }
+
+    return ids;
+}
+
 // Command-line options
 struct MultiGenOptions {
     // Generator configuration
-    size_t num_generators = 12;
+    std::vector<size_t> generator_ids;  // User-provided generator IDs
     double bandwidth_gbps = 10.0;
     std::string output_base_path = "./output";
     size_t flows_per_file = 1000;
@@ -279,13 +343,15 @@ flowgen::GeneratorConfig create_config(size_t generator_id, const MultiGenOption
 
 int main(int argc, char** argv) {
     MultiGenOptions opts;
+    std::string generator_ids_str;
 
     // Create argument parser
     examples::ArgParser parser("Multi-Generator Example - Lightweight flow generation");
 
     // Add options
-    parser.add_option("-n", "num-generators", opts.num_generators,
-                     "Number of generator instances", size_t(12));
+    parser.add_option("-g", "generator-ids", generator_ids_str,
+                     "Generator IDs (comma-separated or ranges: 1,2,3 or 1-5 or 1..5)",
+                     true);  // Required
     parser.add_option("-w", "bandwidth", opts.bandwidth_gbps,
                      "Bandwidth in Gbps", 10.0);
     parser.add_option("-o", "output-path", opts.output_base_path,
@@ -313,25 +379,37 @@ int main(int argc, char** argv) {
     if (!parser.parse(argc, argv)) {
         if (parser.should_show_help()) {
             parser.print_help();
-            std::cout << "\nStop Conditions (specify ONE of the following):\n"
+            std::cout << "\nGenerator IDs Format:\n"
+                      << "  Single values:     -g 0,1,2,5,10\n"
+                      << "  Range with dash:   -g 0-5\n"
+                      << "  Range with dots:   -g 0..5\n"
+                      << "  Mixed:             -g 0-2,5,8-10\n\n"
+                      << "Stop Conditions (specify ONE of the following):\n"
                       << "  --end-timestamp: Generate flows until this timestamp\n"
                       << "  --duration: Generate flows for this many nanoseconds\n"
                       << "  --total-flows: Generate this many flows total (across all generators)\n\n"
                       << "Examples:\n"
-                      << "  # Generate flows for 60 seconds\n"
-                      << "  " << argv[0] << " -n 12 -w 10 --duration 60000000000\n\n"
-                      << "  # Generate 1M total flows\n"
-                      << "  " << argv[0] << " -n 10 --total-flows 1000000\n\n"
-                      << "  # Generate until specific timestamp\n"
-                      << "  " << argv[0] << " -n 5 --start-timestamp 1704067200000000000 \\\n"
-                      << "                      --end-timestamp 1704067260000000000\n\n"
+                      << "  # Generate flows with specific generator IDs\n"
+                      << "  " << argv[0] << " -g 0,1,2 --duration 60000000000\n\n"
+                      << "  # Generate with ID range\n"
+                      << "  " << argv[0] << " -g 0-11 --total-flows 1000000\n\n"
+                      << "  # Mixed IDs and ranges\n"
+                      << "  " << argv[0] << " -g 0-4,10,15-19 --duration 30000000000\n\n"
                       << "Output Structure:\n"
-                      << "  <output-path>/generator_0/, generator_1/, ...\n"
+                      << "  <output-path>/generator_<ID>/, ...\n"
                       << "  Each generator directory contains flows_NNNN.csv files\n";
         } else {
             std::cerr << "Error: " << parser.error() << std::endl;
         }
         return parser.should_show_help() ? 0 : 1;
+    }
+
+    // Parse generator IDs
+    try {
+        opts.generator_ids = parse_generator_ids(generator_ids_str);
+    } catch (const std::exception& e) {
+        std::cerr << "Error parsing generator IDs: " << e.what() << std::endl;
+        return 1;
     }
 
     // Flip parallel flag (since the flag sets it to true, but we want sequential to set parallel=false)
@@ -360,8 +438,8 @@ int main(int argc, char** argv) {
     // Calculate total flows per generator if total_flows specified
     size_t flows_per_generator = 0;
     if (opts.total_flows > 0) {
-        flows_per_generator = opts.total_flows / opts.num_generators;
-        if (opts.total_flows % opts.num_generators != 0) {
+        flows_per_generator = opts.total_flows / opts.generator_ids.size();
+        if (opts.total_flows % opts.generator_ids.size() != 0) {
             flows_per_generator++; // Round up
         }
     }
@@ -371,7 +449,13 @@ int main(int argc, char** argv) {
     std::cout << "Multi-Generator Flow Example (Lightweight)\n";
     std::cout << "========================================\n\n";
     std::cout << "Configuration:\n";
-    std::cout << "  Number of generators: " << opts.num_generators << "\n";
+    std::cout << "  Generator IDs: [";
+    for (size_t i = 0; i < opts.generator_ids.size(); ++i) {
+        std::cout << opts.generator_ids[i];
+        if (i < opts.generator_ids.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]\n";
+    std::cout << "  Number of generators: " << opts.generator_ids.size() << "\n";
     std::cout << "  Bandwidth: " << opts.bandwidth_gbps << " Gbps\n";
     std::cout << "  Execution mode: " << (opts.parallel ? "Parallel" : "Sequential") << "\n";
     std::cout << "  Output base path: " << opts.output_base_path << "\n";
@@ -401,15 +485,15 @@ int main(int argc, char** argv) {
     }
 
     // Create all generator instances
-    std::cout << "Initializing " << opts.num_generators << " generators...\n";
+    std::cout << "Initializing " << opts.generator_ids.size() << " generators...\n";
     std::vector<std::unique_ptr<GeneratorInstance>> generators;
 
     try {
-        for (size_t i = 0; i < opts.num_generators; ++i) {
-            flowgen::GeneratorConfig config = create_config(i, opts);
+        for (size_t gen_id : opts.generator_ids) {
+            flowgen::GeneratorConfig config = create_config(gen_id, opts);
 
             auto gen = std::make_unique<GeneratorInstance>(
-                i,
+                gen_id,
                 opts.output_base_path,
                 config,
                 opts.flows_per_file,
@@ -429,7 +513,7 @@ int main(int argc, char** argv) {
 
     // Generate flows - parallel or sequential mode
     if (opts.parallel) {
-        std::cout << "Generating flows (PARALLEL mode with " << opts.num_generators << " threads)...\n\n";
+        std::cout << "Generating flows (PARALLEL mode with " << opts.generator_ids.size() << " threads)...\n\n";
     } else {
         std::cout << "Generating flows (SEQUENTIAL mode)...\n\n";
     }
@@ -542,21 +626,22 @@ int main(int argc, char** argv) {
 
     std::cout << "\nOutput structure:\n";
     std::cout << "  " << opts.output_base_path << "/\n";
-    for (size_t i = 0; i < std::min(size_t(3), opts.num_generators); ++i) {
-        std::cout << "  ├── generator_" << i << "/\n";
+    size_t display_count = std::min(size_t(3), opts.generator_ids.size());
+    for (size_t i = 0; i < display_count; ++i) {
+        std::cout << "  ├── generator_" << opts.generator_ids[i] << "/\n";
         std::cout << "  │   ├── flows_0000.csv\n";
         std::cout << "  │   ├── flows_0001.csv\n";
         std::cout << "  │   └── ...\n";
     }
-    if (opts.num_generators > 3) {
-        std::cout << "  └── ... (+" << (opts.num_generators - 3) << " more generators)\n";
+    if (opts.generator_ids.size() > 3) {
+        std::cout << "  └── ... (+" << (opts.generator_ids.size() - 3) << " more generators)\n";
     }
 
     std::cout << "\nExample commands:\n";
-    std::cout << "  # Count flows in generator 0\n";
-    std::cout << "  wc -l " << opts.output_base_path << "/generator_0/*.csv\n\n";
-    std::cout << "  # View first file from generator 0\n";
-    std::cout << "  head " << opts.output_base_path << "/generator_0/flows_0000.csv\n\n";
+    std::cout << "  # Count flows in first generator (ID " << opts.generator_ids[0] << ")\n";
+    std::cout << "  wc -l " << opts.output_base_path << "/generator_" << opts.generator_ids[0] << "/*.csv\n\n";
+    std::cout << "  # View first file from first generator\n";
+    std::cout << "  head " << opts.output_base_path << "/generator_" << opts.generator_ids[0] << "/flows_0000.csv\n\n";
     std::cout << "  # Combine all flows from all generators\n";
     std::cout << "  cat " << opts.output_base_path << "/generator_*/flows_*.csv > all_flows.csv\n\n";
 
